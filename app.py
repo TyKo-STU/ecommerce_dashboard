@@ -1,16 +1,34 @@
-from flask import Flask, jsonify, render_template, Response
-import sqlite3, pathlib
+from flask import Flask, jsonify, render_template, Response, abort, make_response
+import sqlite3, pathlib, logging
+
+# Logging Setup
+logging.basicConfig(filename="app.log",level=logging.DEBUG)
 
 working_directory = pathlib.Path(__file__).parent.absolute()
 DATABASE = working_directory / 'CCL_ecommerce.db'
 
 def query_db(query: str, args=()) -> list:
-    with sqlite3.connect(DATABASE) as conn:
-        cursor = conn.cursor()
-        result = cursor.execute(query, args).fetchall()
-    return result
+    '''SQLite database querying function'''
+    try:
+        with sqlite3.connect(DATABASE) as conn:
+            cursor = conn.cursor()
+            result = cursor.execute(query, args).fetchall()
+        return result
+    except sqlite3.Error as e:
+        logging.error("Database error: %s", e)
+        abort(500, description="Database error occurred.")
 
 app = Flask(__name__)
+
+
+@app.errorhandler(404)
+def not_found():
+    return make_response(jsonify({"error": "Not Found"}), 404)
+
+@app.errorhandler(500)
+def internal_error(error):
+    return make_response(jsonify({"error": "Internal server error"}), 500)
+
 
 @app.route('/')
 def index() -> str:
@@ -18,17 +36,21 @@ def index() -> str:
 
 @app.route("/api/orders_over_time")
 def orders_over_time() -> Response:
+    
     query = """
     SELECT order_date, COUNT(order_id) AS num_orders
     FROM orders
     GROUP BY order_date
     ORDER BY order_date;
     """
-    result = query_db(query)
-
-    dates = [row[0] for row in result]
-    counts = [row[1] for row in result]
-    return jsonify({"dates": dates, "counts": counts})
+    try:
+        result = query_db(query)
+        dates = [row[0] for row in result]
+        counts = [row[1] for row in result]
+        return jsonify({"dates": dates, "counts": counts})
+    except Exception as e:
+        logging.error("Error in /api/orders_over_time: %s", e)
+        abort(500, description="Error processing data.")
 
 # Register a route in Flask to handle requests to "/api/low_stock_levels"
 @app.route("/api/low_stock_levels")
@@ -77,6 +99,54 @@ def most_popular_products() -> Response:
     
     # Return the results as a JSON response
     return jsonify({"products": products, "quantities": quantities})
+
+@app.route("/api/revenue_generation")
+def revenue_generation() -> Response:
+    query = """
+    SELECT o.order_date, SUM(od.price_at_time * od.quantity_ordered) AS total_revenue
+    FROM order_details od
+    JOIN orders o ON od.order_id = o.order_id
+    GROUP BY o.order_date
+    ORDER BY o.order_date;
+    """
+    result = query_db(query)
+
+    dates = [row[0] for row in result]
+    revenues = [row[1] for row in result]
+    return jsonify({"dates": dates, "revenues": revenues})
+
+
+@app.route("/api/product_category_popularity")
+def product_category_popularity() -> Response:
+    query = """
+    SELECT pc.category_name, SUM(od.price_at_time * od.quantity_ordered) AS total_sales
+    FROM products p
+    JOIN product_categories pc ON p.category_id = pc.category_id
+    JOIN order_details od ON p.product_id = od.product_id
+    GROUP BY pc.category_name
+    ORDER BY total_sales DESC;
+    """
+    result = query_db(query)
+
+    categories = [row[0] for row in result]
+    sales = [row[1] for row in result]
+    return jsonify({"categories": categories, "sales": sales})
+
+
+@app.route("/api/payment_method_popularity")
+def payment_method_popularity() -> Response:
+    query = """
+    SELECT pm.method_name, COUNT(p.payment_id) AS transaction_count
+    FROM payments p
+    JOIN payment_methods pm ON p.method_id = pm.method_id
+    GROUP BY pm.method_name
+    ORDER BY transaction_count DESC;
+    """
+    result = query_db(query)
+
+    methods = [row[0] for row in result]
+    counts = [row[1] for row in result]
+    return jsonify({"methods": methods, "counts": counts})
 
 if __name__ == '__main__':
     app.run(debug=True)

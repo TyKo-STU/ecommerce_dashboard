@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, render_template, Response, abort, make_response
-import sqlite3, pathlib, logging
+import sqlite3, pathlib, logging, requests
 
 # Logging Setup
 logging.basicConfig(filename="app.log",level=logging.DEBUG)
@@ -59,19 +59,19 @@ def low_stock_levels() -> Response:
     # Define the SQL query string
     query = """
     SELECT p.product_name, s.quantity       
-    FROM stock_level s                      
+    FROM stock_level s
     JOIN products p ON s.product_id = p.product_id 
+    WHERE s.quantity < 20
     ORDER BY s.quantity ASC;                
     """
-    
+
     # Execute the query and store the results
     result = query_db(query)
-
     # Extract product names from the result
     products = [row[0] for row in result]
     # Extract quantities from the result
     quantities = [row[1] for row in result]
-    
+
     # Return the results as a JSON response
     return jsonify({"products": products, "quantities": quantities})
 
@@ -147,6 +147,35 @@ def payment_method_popularity() -> Response:
     methods = [row[0] for row in result]
     counts = [row[1] for row in result]
     return jsonify({"methods": methods, "counts": counts})
+
+@app.route("/api/temperature_over_time", methods=["GET"])
+def temperature_over_time():
+    # Fetching the date range from orders_over_time
+    query = """
+SELECT MIN(order_date), MAX(order_date)
+FROM orders;
+"""
+    try:
+        result = query_db(query)
+        start_date, end_date = result[0]
+
+        # Making an API call to fetch temperature data
+        API_ENDPOINT = "https://archive-api.open-meteo.com/v1/archive"
+        params = {
+            "latitude": 50.6053,  # London UK
+            "longitude": -3.5952,
+            "start_date": start_date,
+            "end_date": end_date,
+            "daily": "temperature_2m_max",
+            "timezone": "GMT",
+        }
+        response = requests.get(API_ENDPOINT, params=params)
+        response.raise_for_status()
+
+        return jsonify(response.json())
+    except Exception as e:
+        logging.error("Error in /api/temperature_over_time: %s", e)
+        abort(500, description="Error fetching temperature data.")
 
 if __name__ == '__main__':
     app.run(debug=True)
